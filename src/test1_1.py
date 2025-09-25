@@ -273,26 +273,33 @@ for epoch in range(1, epochs+1):
             loss.backward()（求梯度）→ optimizer.step()（更新参数）→ optimizer.zero_grad()（清梯度），这是 PyTorch 参数更新的标准流程。
         """
         features,labels = batch
-        #forward
-        preds = net(features)
-        loss = loss_fn(preds,labels)
+        """
+        batch 是从 dl_train（训练数据管道）中迭代出的一个批次数据，由两部分组成：
+        features：当前批次的特征张量（形状为 [batch_size, n_features]，如 [8, 13]，8 个样本，13 个特征）；
+        labels：当前批次的标签张量（形状为 [batch_size, 1]，如 [8, 1]，每个样本对应 “是否幸存” 的标签 0 或 1）。
+        将批次数据拆分为模型可直接使用的 “输入特征” 和 “监督标签”。
+        """
+        #forward 前向传播（模型预测与损失计算）
+        preds = net(features) # 将特征输入模型，经过多层计算后得到原始预测结果（logits）。
+        loss = loss_fn(preds,labels) # 表示当前批次的平均损失（损失越小，预测越准）。
         
         #backward
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
+        loss.backward() # 计算梯度
+        optimizer.step() # 更新模型参数
+        optimizer.zero_grad() # 清空梯度
             
         #metrics
         step_metrics = {"train_"+name:metric_fn(preds, labels).item() 
-                        for name,metric_fn in train_metrics_dict.items()}
+                        for name,metric_fn in train_metrics_dict.items()} # 遍历 train_metrics_dict 中的每个键值对，计算当前批次的指标值，并构建新的字典。
         
-        step_log = dict({"train_loss":loss.item()},**step_metrics)
+        step_log = dict({"train_loss":loss.item()},**step_metrics) # 将当前批次的损失和指标整合到一个字典中，形成完整的 “批次日志”。
 
         total_loss += loss.item()
         
         step+=1
+        # 区分中间批次和最后批次
         if i!=len(dl_train)-1:
-            loop.set_postfix(**step_log)
+            loop.set_postfix(**step_log) # 进度条会实时显示 “当前批次的即时指标”（如 train_loss=0.35, train_acc=0.875）。
         else:
             epoch_loss = total_loss/step
             epoch_metrics = {"train_"+name:metric_fn.compute().item() 
@@ -301,9 +308,9 @@ for epoch in range(1, epochs+1):
             loop.set_postfix(**epoch_log)
 
             for name,metric_fn in train_metrics_dict.items():
-                metric_fn.reset()
+                metric_fn.reset() # 清空这些累积值，避免当前 epoch 的计数影响下一个 epoch 的指标计算（确保每个 epoch 的指标都是独立的）
                 
-    for name, metric in epoch_log.items():
+    for name, metric in epoch_log.items(): # 当前 epoch（轮次）的训练 / 验证指标（如损失、准确率）记录到history字典中
         history[name] = history.get(name, []) + [metric]
         
 
@@ -315,7 +322,7 @@ for epoch in range(1, epochs+1):
     
     val_metrics_dict = deepcopy(metrics_dict) 
     
-    with torch.no_grad():
+    with torch.no_grad(): # 禁用梯度计算
         for i, batch in loop: 
 
             features,labels = batch
@@ -350,7 +357,11 @@ for epoch in range(1, epochs+1):
 
     # 3，early-stopping -------------------------------------------------
     arr_scores = history[monitor]
-    best_score_idx = np.argmax(arr_scores) if mode=="max" else np.argmin(arr_scores)
+    """
+    monitor是之前设置的监控指标（此处为"val_acc"，即验证集准确率）
+    history[monitor]是history字典中存储该指标的列表，记录了从第 1 轮到当前轮的所有指标值
+    """
+    best_score_idx = np.argmax(arr_scores) if mode=="max" else np.argmin(arr_scores) # 定位历史记录中 “最佳指标” 出现的轮次
     if best_score_idx==len(arr_scores)-1:
         torch.save(net.state_dict(),ckpt_path)
         print("<<<<<< reach best {0} : {1} >>>>>>".format(monitor,
@@ -359,13 +370,13 @@ for epoch in range(1, epochs+1):
         print("<<<<<< {} without improvement in {} epoch, early stopping >>>>>>".format(
             monitor,patience),file=sys.stderr)
         break 
-    net.load_state_dict(torch.load(ckpt_path,weights_only=True))
+    net.load_state_dict(torch.load(ckpt_path,weights_only=True)) # 加载最佳模型参数（为下一轮做准备）
     
-dfhistory = pd.DataFrame(history)
+dfhistory = pd.DataFrame(history) #  训练记录整理
 
 
 ### 四，评估模型
-dfhistory 
+print(dfhistory) 
 
 import matplotlib.pyplot as plt
 
@@ -381,15 +392,60 @@ def plot_metric(dfhistory, metric):
     plt.legend(["train_"+metric, 'val_'+metric])
     plt.show()
 
-    plot_metric(dfhistory,"acc")
+plot_metric(dfhistory,"loss")
+plot_metric(dfhistory,"acc")
 
 
 ### 五，使用模型
 #预测概率
-y_pred_probs = torch.sigmoid(net(torch.tensor(x_test[0:10]).float())).data
-y_pred_probs
+y_pred_probs = torch.sigmoid(net(torch.tensor(x_test[0:10]).float())).data # 使用训练好的模型对测试集中的前 10 个样本进行预测，并将模型输出转换为概率值
+print(y_pred_probs)
 
-#预测类别
+#预测类别 将预测概率（y_pred_probs）转换为具体的类别标签（0 或 1）
 y_pred = torch.where(y_pred_probs>0.5,
         torch.ones_like(y_pred_probs),torch.zeros_like(y_pred_probs))
-y_pred
+"""
+torch.where(condition, x, y)
+这是 PyTorch 中的条件选择函数，作用是：
+遍历张量中的每个元素，判断是否满足condition（条件）；
+若满足，取x中对应位置的元素；
+若不满足，取y中对应位置的元素。
+"""
+print(y_pred)
+
+
+### 六，保存模型
+"""
+Pytorch 有两种保存模型的方式，都是通过调用pickle序列化方法实现的。
+    第一种方法只保存模型参数。
+    第二种方法保存完整模型。
+推荐使用第一种，第二种方法可能在切换设备和目录的时候出现各种问题。
+"""
+
+# **1，保存模型参数(推荐)**
+print(net.state_dict().keys()) # 打印出模型中所有可学习参数（权重、偏置等）的名称（键）
+
+# 保存模型参数
+torch.save(net.state_dict(), "./data/net_parameter.pt")
+"""
+作用：将训练好的模型net的参数（权重、偏置等）保存到指定路径./data/net_parameter.pt。
+细节：
+    net.state_dict()返回模型的参数字典（键为参数名称，值为参数张量）；
+    torch.save(...)将参数字典序列化并保存为.pt文件（PyTorch 的标准参数文件格式）；
+    保存的是 “参数” 而非整个模型结构，因此后续加载时需要先创建相同结构的模型。
+"""
+net_clone = create_net() # 创建一个与原始模型net结构完全相同的新模型net_clone（但参数是随机初始化的，未训练状态）
+net_clone.load_state_dict(torch.load("./data/net_parameter.pt",weights_only=True)) # 将之前保存的参数文件加载到克隆模型net_clone中，使克隆模型拥有与原始模型net完全相同的参数（即具备相同的预测能力）。
+
+print(torch.sigmoid(net_clone.forward(torch.tensor(x_test[0:10]).float())).data) # 用加载了参数的克隆模型对测试集前 10 个样本进行预测，得到与原始模型net完全相同的预测概率。
+
+# **2，保存完整模型(不推荐)**
+torch.save(net, './data/net_model.pt')
+"""
+保存整个模型对象，包括：
+    模型的结构（各层的定义，如nn.Linear、nn.ReLU的排列组合）；
+    模型的参数（与state_dict内容一致）；
+    模型的其他属性（如训练 / 评估模式状态）
+"""
+net_loaded = torch.load('./data/net_model.pt',weights_only=False)
+print(torch.sigmoid(net_loaded(torch.tensor(x_test[0:10]).float())).data)
